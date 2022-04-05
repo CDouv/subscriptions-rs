@@ -35,17 +35,19 @@ struct Subscription {
     meta_data:Option<MetaData<>>,
 
 }
-#[derive(Debug,Deserialize)]
+#[derive(Debug,Deserialize,Clone)]
 struct MetaData {
     accounts: Vec<String>,
 }
+
+
 
 
 fn main() {
 
 
 #[tokio::main]
-async fn getData() -> Result<(List), Box<dyn std::error::Error>> {
+async fn get_data() -> Result<(List), Box<dyn std::error::Error>> {
 
     dotenv().ok();
 
@@ -76,7 +78,36 @@ async fn getData() -> Result<(List), Box<dyn std::error::Error>> {
     //     println!("{:?}", sub.subscription.meta_data.as_ref().unwrap_or(MetaData));
     // }
     return Ok(resp_json)
-};
+}
+
+fn get_subscription_ids(data:List) -> () {
+
+    let mut subscriptions:Vec<String> =vec![];
+
+    let subs = data.list;
+
+    for (i,sub) in subs.iter().enumerate() {
+
+        // let no_email = MetaData {
+        //     accounts: vec!["".to_string()]
+        // };
+        
+        let sub_id = &sub.subscription.id;
+
+        subscriptions.push(sub_id.to_string());
+
+        
+        // println!("{:?}",&sub.subscription.meta_data.unwrap_or(no_email));
+    };
+
+    println!("{:?}",subscriptions);
+
+
+}
+
+let data = get_data();
+
+println!("{:?}",get_subscription_ids(data.unwrap()));
 
 }
 
