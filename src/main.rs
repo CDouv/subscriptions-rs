@@ -17,42 +17,57 @@ use reqwest::RequestBuilder;
 // let mut db = Client::connect(format!("postgresql://postgres:{}@localhost:5438/postgres",psql_pw),NoTls).unwrap();
 
 #[derive(Debug,Deserialize)]
-struct List {
-    list: Vec<SubscriptionInformation>,
+struct ChargebeeList {
+    list: Vec<ChargebeeSubscriptionInformation>,
 }
 
 #[derive(Debug,Deserialize)]
-struct SubscriptionInformation {
-    subscription: Subscription<>,
+struct ChargebeeSubscriptionInformation {
+    subscription: ChargebeeSubscription<>,
 
 }
 
 
 #[derive(Debug,Deserialize)]
 
-struct Subscription {
+struct ChargebeeSubscription {
     id: String,
-    meta_data:Option<MetaData<>>,
+    meta_data:Option<ChargebeeMetaData<>>,
 
 }
 #[derive(Debug,Deserialize,Clone)]
-struct MetaData {
+struct ChargebeeMetaData {
     accounts: Vec<String>,
 }
 
-
-
+#[derive(Debug,Deserialize,Clone)]
+struct SubscriptionData {
+    subscription_id: String,
+    email: Vec<String>,
+    subscription_entitlement: SubscriptionEntitlements<>,
+}
+#[derive(Debug,Deserialize,Clone)]
+struct SubscriptionEntitlement {
+    feature_id: String,
+    feature_name: String,
+    value: String,
+    is_enabled:bool,
+}
+#[derive(Debug,Deserialize,Clone)]
+struct SubscriptionEntitlements {
+    list: Vec<SubscriptionEntitlement>
+}
 
 fn main() {
 
 
 #[tokio::main]
-async fn get_data() -> Result<(List), Box<dyn std::error::Error>> {
+async fn get_data() -> Result<(ChargebeeList), Box<dyn std::error::Error>> {
 
     dotenv().ok();
 
     let api_key = env::var("API_KEY")?;
-    println!("{}",api_key);
+    
 
   
 
@@ -63,57 +78,130 @@ async fn get_data() -> Result<(List), Box<dyn std::error::Error>> {
     .basic_auth(api_key,Some(""))
     .send()
     .await?;
-    // println!("{:#?}", resp);
-
-    let resp_json = resp.json::<List>().await?;
 
 
-    // println!("{:?}", resp_json);
-    // println!("{:?}", resp_json.list[0]);
+    let resp_json = resp.json::<ChargebeeList>().await?;
 
 
-    // Get subscription ids
-    // for sub in resp_json.list.iter() {
-    //     println!("{:?}",sub.subscription.id);
-    //     println!("{:?}", sub.subscription.meta_data.as_ref().unwrap_or(MetaData));
-    // }
+
     return Ok(resp_json)
 }
 
-fn get_subscription_ids(data:List) -> () {
 
-    let mut subscriptions:Vec<String> =vec![];
+
+fn get_subscription_ids_emails(data:ChargebeeList) -> HashMap<String,Vec<String>> {
+
+    let mut subscriptions:HashMap<String,Vec<String>> = HashMap::new();
 
     let subs = data.list;
 
     for (i,sub) in subs.iter().enumerate() {
 
-        // let no_email = MetaData {
-        //     accounts: vec!["".to_string()]
-        // };
+        let no_email = ChargebeeMetaData {
+            accounts: vec!["".to_string()]
+        };
         
         let sub_id = &sub.subscription.id;
+        let sub_email = sub.subscription.meta_data.as_ref().unwrap_or(&no_email);
 
-        subscriptions.push(sub_id.to_string());
-
-        
-        // println!("{:?}",&sub.subscription.meta_data.unwrap_or(no_email));
+        subscriptions.insert(sub_id.to_string(),sub_email.accounts.to_vec());
+   
     };
 
-    println!("{:?}",subscriptions);
-
-
-}
-
-let data = get_data();
-
-println!("{:?}",get_subscription_ids(data.unwrap()));
+    return subscriptions;
 
 }
 
     
 
-    // Transform struct into HashMap
+  
+
+
+
+
+
+ 
+
+
+async fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>{
+
     
-    // println!(":?}",data);
+
+    dotenv().ok();
+
+    let api_key = env::var("API_KEY")?;
+    
+    //Create request client
+    let client = reqwest::Client::new();
+    let resp = client
+    .get("https://pod2-test.chargebee.com/api/v2/subscriptions/".to_string()+ &subscription.0 +"/subscription_entitlements")
+    .basic_auth(api_key,Some(""))
+    .send()
+    .await?;
+    
+    
+    
+    let resp_json = resp.json::<SubscriptionEntitlements>().await?;
+
+    return Ok(resp_json)
+    }
+    
+    
+async fn get_subscription_entitlements(subscriptions:HashMap<String,Vec<String>>) -> HashMap<String,SubscriptionData> {
+    let mut subscription_all:HashMap<String,SubscriptionData> = HashMap::new();
+    for (subscription_id,emails) in &subscriptions {
+        let entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>> = get_subscription_entitlement((subscription_id.to_string(),subscriptions[subscription_id].to_vec())).await;
+
+
+        //Create SubscriptionData object
+        let subscription_data = SubscriptionData {
+            //Populate subscription_id
+            subscription_id: subscription_id.to_string(),
+            //Populate email
+            email: emails.to_vec(),
+            //Populate entitlement
+            subscription_entitlement:entitlement.unwrap(),
+        };
+        
+        subscription_all.insert(subscription_id.to_string(),subscription_data);
+        
+
+        
+    }
+
+    return subscription_all;
+}
+
+
+
+//Write function to create HashMap of (email,entitlements)
+
+// Testing
+
+//1 Get data from Chargebee
+let data = get_data().unwrap();
+
+//2 Pull subscription id's and email from Chargebee response
+let subscription_info:HashMap<String,Vec<String>> = get_subscription_ids_emails(data);
+println!("{:?}",subscription_info);
+
+//3 Test single entitlement calculation
+
+let single_subscriber = ("16BjoWSif9km010WB".to_string(),subscription_info["16BjoWSif9km010WB"].to_vec());
+let single_entitlement = get_subscription_entitlement(single_subscriber);
+println!("{:?}", single_entitlement);
+//3 Loop through subscription ids and get entitlements
+// let subscription_all:HashMap<String,SubscriptionData> = get_subscription_entitlements(subscription_info);
+//4 Check Results
+// println!("{:?}", subscription_all);
+//5 Create a HashMap of (email,entitlements)
+
+//6 Populate postgres table with (email,entitlements)
+
+
+
+}
+
+    
+
 
