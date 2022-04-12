@@ -2,6 +2,7 @@ use chrono::{DateTime,Utc};
 use postgres::{Client, NoTls};
 use dotenv::dotenv;
 use serde_derive::Deserialize;
+use serde_json::to_string_pretty;
 use std::env;
 use std::collections::HashMap;
 
@@ -46,16 +47,34 @@ struct SubscriptionData {
     email: Vec<String>,
     subscription_entitlement: SubscriptionEntitlements<>,
 }
+
+//Three structs below to deal with incoming entitlement data
 #[derive(Debug,Deserialize,Clone)]
-struct SubscriptionEntitlement {
+struct SubscriptionEntitlementData {
     feature_id: String,
     feature_name: String,
     value: String,
     is_enabled:bool,
 }
 #[derive(Debug,Deserialize,Clone)]
+struct SubscriptionEntitlement {
+    subscription_entitlement:SubscriptionEntitlementData,
+}
+#[derive(Debug,Deserialize,Clone)]
 struct SubscriptionEntitlements {
     list: Vec<SubscriptionEntitlement>
+}
+
+//Struct for desired entitlement format -> JSON
+#[derive(Debug,Deserialize)]
+struct EntitlementFormat {
+    name:Option<String>,
+    features:ValidatorFeatures<>,
+}
+#[derive(Debug,Deserialize)]
+struct ValidatorFeatures {
+    max_wells:Option<i64>,
+    max_accounts:Option<i32>,
 }
 
 fn main() {
@@ -122,7 +141,7 @@ fn get_subscription_ids_emails(data:ChargebeeList) -> HashMap<String,Vec<String>
 
  
 
-
+#[tokio::main]
 async fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>{
 
     
@@ -139,18 +158,16 @@ async fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Resu
     .send()
     .await?;
     
-    
-    
+    println!("{:?}", resp.status());
     let resp_json = resp.json::<SubscriptionEntitlements>().await?;
-
     return Ok(resp_json)
     }
     
-    
-async fn get_subscription_entitlements(subscriptions:HashMap<String,Vec<String>>) -> HashMap<String,SubscriptionData> {
+
+fn get_subscription_entitlements(subscriptions:HashMap<String,Vec<String>>) -> HashMap<String,SubscriptionData> {
     let mut subscription_all:HashMap<String,SubscriptionData> = HashMap::new();
     for (subscription_id,emails) in &subscriptions {
-        let entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>> = get_subscription_entitlement((subscription_id.to_string(),subscriptions[subscription_id].to_vec())).await;
+        let entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>> = get_subscription_entitlement((subscription_id.to_string(),subscriptions[subscription_id].to_vec()));
 
 
         //Create SubscriptionData object
@@ -172,6 +189,132 @@ async fn get_subscription_entitlements(subscriptions:HashMap<String,Vec<String>>
     return subscription_all;
 }
 
+fn extract_entitlements(entitlements:SubscriptionEntitlements) {
+
+}
+
+fn clean_subscription_data(subscriptions:HashMap<String,SubscriptionData>) -> HashMap<String,HashMap<String,String>> {
+    //Hash Map representing (email,{feature_name:feature_value})
+    let mut clean_data: HashMap<String,HashMap<String,String>> = HashMap::new();
+
+    for (subscription_id, subscription_data) in subscriptions {
+
+        // transform entitlement to JSON:
+        /*
+        
+        [
+            {
+                "name": "validator",
+                "features": [
+                    "max-wells": "10000",
+                     "max-accounts": "2"
+                ]
+            }
+        ]
+        
+        */
+
+
+        // previous format:
+
+        /*
+        {"list": [
+        {"subscription_entitlement": {
+        "subscription_id": "AzqYPESlckalh27S",
+        "feature_id": "validator--max-wells",
+        "feature_name": "Validator Max Wells",
+        "feature_type": "custom",
+        "value": "10000",
+        "name": "10,000 wells",
+        "is_overridden": false,
+        "is_enabled": true,
+        "object": "subscription_entitlement"
+    }},
+    {"subscription_entitlement": {
+        "subscription_id": "AzqYPESlckalh27S",
+        "feature_id": "validator--max-accounts",
+        "feature_name": "Validator Max Accounts",
+        "feature_unit": "account",
+        "feature_type": "quantity",
+        "value": "1",
+        "name": "1 account",
+        "is_overridden": false,
+        "is_enabled": true,
+        "object": "subscription_entitlement"
+    }}
+]}
+
+
+
+Initial goal -> Get a HashMap (product-feature,value) 
+    ex: (validator--max-wells,10000)
+        */
+        // let mut entitlement_features = ValidatorFeatures {
+        //     max_wells:None,
+        //     max_accounts:None,
+        // };
+        // let mut entitlement_format = EntitlementFormat {
+        //     name:None,
+        //     features: entitlement_features,
+        // };
+
+        
+
+        let mut entitlements_map:HashMap<String,String> = HashMap::new();
+
+        let entitlements = subscription_data.subscription_entitlement.list;
+
+        for entitlement in entitlements.iter() {
+           let feature_name:String = entitlement.subscription_entitlement.feature_id.to_string();
+           let feature_value:String = entitlement.subscription_entitlement.value.to_string();
+
+           entitlements_map.insert(feature_name,feature_value);
+        };
+
+        println!("ENTITLEMENTS MAP{:?}",entitlements_map);
+
+        
+        
+
+        for email in subscription_data.email {
+            let entitlements:HashMap<String,String> = entitlements_map.clone();
+            clean_data.insert(email.to_string(),entitlements);
+        }
+        println!("ENTITLEMENTS MAP{:?}",convert_features_to_JSON(entitlements_map));
+    }
+
+    return clean_data;
+}
+
+// Think about writing a function here that takes a Vec<EntitlementFormat> and returns a Vec of unique product names
+fn get_product_names(entitlements:&Vec<EntitlementFormat<>>) -> Vec<String> {
+let mut product_names:Vec<String> = vec!();
+for entitlement in entitlements {
+    let entitlement_name = match entitlement.name {
+        Some(x) => x,
+        None => "None".to_string(),
+    };
+    product_names.push(entitlement_name);
+
+}
+product_names.sort();
+product_names.dedup();
+
+return product_names;
+}
+
+
+fn convert_features_to_JSON(features: HashMap<String,String>) -> () {
+
+    let entitlements:Vec<EntitlementFormat<>> = vec!();
+
+    for (feature_name,feature_value) in features {
+
+        let product_name = feature_name.split("--").collect::<Vec<&str>>()[0];
+        let product_names = get_product_names(&entitlements);
+
+    };
+}
 
 
 //Write function to create HashMap of (email,entitlements)
@@ -187,16 +330,46 @@ println!("{:?}",subscription_info);
 
 //3 Test single entitlement calculation
 
-let single_subscriber = ("16BjoWSif9km010WB".to_string(),subscription_info["16BjoWSif9km010WB"].to_vec());
-let single_entitlement = get_subscription_entitlement(single_subscriber);
+let single_subscriber = ("AzqYPESlckalh27S".to_string(),subscription_info["AzqYPESlckalh27S"].to_vec());
+let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber);
 println!("{:?}", single_entitlement);
+
+
+let single_subscriber = ("AzyuIISpk4F1U25R3".to_string(),subscription_info["AzyuIISpk4F1U25R3"].to_vec());
+let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber);
+println!("{:?}", single_entitlement);
+
+let single_subscriber = ("16BjoWSif9km010WB".to_string(),subscription_info["16BjoWSif9km010WB"].to_vec());
+let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber);
+println!("{:?}", single_entitlement);
+
 //3 Loop through subscription ids and get entitlements
-// let subscription_all:HashMap<String,SubscriptionData> = get_subscription_entitlements(subscription_info);
-//4 Check Results
+
+let subscription_all:HashMap<String,SubscriptionData> = get_subscription_entitlements(subscription_info);
+println!("SUBSCRIPTION_ALL {:?}",subscription_all);
+
+// 4 Check Results
 // println!("{:?}", subscription_all);
+
+
+// println!("{:?}", subscription_all["AzqYPESlckalh27S"].subscription_id);
+// println!("{:?}", subscription_all["AzqYPESlckalh27S"].email);
+// println!("{:?}", subscription_all["AzqYPESlckalh27S"].subscription_entitlement);
+
+
+
 //5 Create a HashMap of (email,entitlements)
+let clean_data = clean_subscription_data(subscription_all);
+
+println!("clean data");
+println!("{:?}",clean_data);
+
 
 //6 Populate postgres table with (email,entitlements)
+
+
+
+//Test extract subscription entitlements function
 
 
 
