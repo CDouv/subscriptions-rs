@@ -1,10 +1,10 @@
 CREATE SCHEMA subscriptions;
 
 CREATE TABLE IF NOT EXISTS user_information (
-    user_id varchar(200) NOT NULL,
-    PRIMARY KEY (user_id)
+    user_email VARCHAR(200) NOT NULL,
+    user_entitlements jsonb,
+    PRIMARY KEY (user_email)
 );
 
 
 
-{"products":[{"features":[{"name":"max-accounts","value":2}],"name":"validator"}]}
