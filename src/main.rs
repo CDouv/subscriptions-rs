@@ -9,8 +9,8 @@ use serde_derive::Serialize;
 use std::env;
 use std::collections::HashMap;
 
-use reqwest::header::{HeaderMap, HeaderValue,AUTHORIZATION};
-use reqwest::RequestBuilder;
+// use reqwest::header::{HeaderMap, HeaderValue,AUTHORIZATION};
+
 
 //Structs starting with 'Chargebee' are created to match incoming data from Chargebee API
 #[derive(Debug,Deserialize)]
@@ -40,24 +40,24 @@ struct ChargebeeMetaData {
 struct SubscriptionData {
     subscription_id: String,
     email: Vec<String>,
-    subscription_entitlement: SubscriptionEntitlements<>,
+    subscription_entitlement: ChargebeeSubscriptionEntitlements<>,
 }
 
-//Three structs below to deal with incoming entitlement data from Chargebee API
+//Three structs below to deal with incoming entitlement data
 #[derive(Debug,Deserialize,Clone)]
-struct SubscriptionEntitlementData {
+struct ChargebeeSubscriptionEntitlementData {
     feature_id: String,
     feature_name: String,
     value: String,
     is_enabled:bool,
 }
 #[derive(Debug,Deserialize,Clone)]
-struct SubscriptionEntitlement {
-    subscription_entitlement:SubscriptionEntitlementData,
+struct ChargebeeSubscriptionEntitlement {
+    subscription_entitlement:ChargebeeSubscriptionEntitlementData,
 }
 #[derive(Debug,Deserialize,Clone)]
-struct SubscriptionEntitlements {
-    list: Vec<SubscriptionEntitlement>
+struct ChargebeeSubscriptionEntitlements {
+    list: Vec<ChargebeeSubscriptionEntitlement>
 }
 
 //Struct for desired entitlement format -> JSON
@@ -116,7 +116,7 @@ fn get_subscription_ids_emails(data:ChargebeeList) -> HashMap<String,Vec<String>
 
 
 
-fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Result<(SubscriptionEntitlements), reqwest::Error>{
+fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Result<(ChargebeeSubscriptionEntitlements), reqwest::Error>{
 
     dotenv().ok();
 
@@ -130,15 +130,15 @@ fn get_subscription_entitlement(subscription:(String,Vec<String>)) -> Result<(Su
     .send()?;
     
 
-    let resp_json = resp.json::<SubscriptionEntitlements>();
+    let resp_json = resp.json::<ChargebeeSubscriptionEntitlements>();
     return resp_json;
     }
 
-
-fn get_subscription_entitlements(subscriptions:HashMap<String,Vec<String>>) -> HashMap<String,SubscriptionData> {
+//Function loops through subscription ids, pulls entitlement data using get_subscription_entitlement, and organizes data into subscription_id:SubscriptionData
+fn combine_subscription_data(subscriptions:HashMap<String,Vec<String>>) -> HashMap<String,SubscriptionData> {
         let mut subscription_all:HashMap<String,SubscriptionData> = HashMap::new();
         for (subscription_id,emails) in &subscriptions {
-            let entitlement:SubscriptionEntitlements = get_subscription_entitlement((subscription_id.to_string(),subscriptions[subscription_id].to_vec())).unwrap();
+            let entitlement:ChargebeeSubscriptionEntitlements = get_subscription_entitlement((subscription_id.to_string(),subscriptions[subscription_id].to_vec())).unwrap();
     
     
             //Create SubscriptionData object
@@ -257,76 +257,23 @@ let psql_pw:String = dotenv::var("POSTGRES_PASSWORD").unwrap();
 
 let mut db = Client::connect(format!("postgresql://postgres:{}@localhost:5438/postgres",psql_pw).as_str(),NoTls).unwrap();
 
- 
-
-// Testing
-
-//1 Get data from Chargebee
+//Get data from Chargebee
 let data = get_data().unwrap();
 
-//2 Pull subscription id's and email from Chargebee response
-let subscription_info:HashMap<String,Vec<String>> = get_subscription_ids_emails(data);
-println!("{:?}",subscription_info);
+//Pull subscription id's and email from Chargebee response
+let subscription_ids_emails:HashMap<String,Vec<String>> = get_subscription_ids_emails(data);
 
-//3 Test single entitlement calculation
+//Get subscription entitlements, organize data into subscription_id:SubscriptionData
+let subscription_data:HashMap<String,SubscriptionData> = combine_subscription_data(subscription_ids_emails);
 
-// let single_subscriber = ("AzqYPESlckalh27S".to_string(),subscription_info["AzqYPESlckalh27S"].to_vec());
-// let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber).await;
-// println!("{:?}", single_entitlement);
+//Create a HashMap of (email,entitlements)
+let clean_data = clean_subscription_data(subscription_data);
 
+//Populate postgres table with (email,entitlements)
 
-// let single_subscriber = ("AzyuIISpk4F1U25R3".to_string(),subscription_info["AzyuIISpk4F1U25R3"].to_vec());
-// let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber).await;
-// println!("{:?}", single_entitlement);
-
-// let single_subscriber = ("16BjoWSif9km010WB".to_string(),subscription_info["16BjoWSif9km010WB"].to_vec());
-// let single_entitlement:Result<(SubscriptionEntitlements), Box<dyn std::error::Error>>= get_subscription_entitlement(single_subscriber).await;
-// println!("{:?}", single_entitlement);
-
-//3 Loop through subscription ids and get entitlements
-
-let subscription_all:HashMap<String,SubscriptionData> = get_subscription_entitlements(subscription_info);
-println!("SUBSCRIPTION_ALL {:?}",subscription_all);
-
-// 4 Check Results
-// println!("{:?}", subscription_all);
-
-
-// println!("{:?}", subscription_all["AzqYPESlckalh27S"].subscription_id);
-// println!("{:?}", subscription_all["AzqYPESlckalh27S"].email);
-// println!("{:?}", subscription_all["AzqYPESlckalh27S"].subscription_entitlement);
-
-
-
-//5 Create a HashMap of (email,entitlements)
-let clean_data = clean_subscription_data(subscription_all);
-
-println!("clean data");
-for (email, entitlements) in &clean_data {
-    println!("email: {:?}\n entitlements: {:?}\n\n",email,entitlements);
-};
-
-
-
-
-// //6 Populate postgres table with (email,entitlements)
-
-let date = Local::now();
-
-println!("Today's date is {:?}",date);
-
-// db.execute("DROP table IF EXISTS user_information", &[]).unwrap();
-
-// db.execute("CREATE TABLE IF NOT EXISTS user_information (
-//     user_email            VARCHAR(200) NOT NULL,
-//     user_entitlements     jsonb,
-//     date_modified         TIMESTAMP WITH TIME ZONE,
-//     PRIMARY KEY           (user_email)
-//     )", &[]).unwrap();
-
+let timestamp = Local::now();
 
 for (email, entitlements) in &clean_data {
-    println!("email: {:?} entitlements: {:?}",email,entitlements);
     db.execute(
         "INSERT INTO user_information (user_email,user_entitlements,date_modified) 
                VALUES ($1,$2,$3) 
@@ -335,18 +282,22 @@ for (email, entitlements) in &clean_data {
                 UPDATE SET user_entitlements = $2,
                            date_modified = $3"
                 ,
-        &[email,&entitlements,&date]).unwrap();
+        &[email,&entitlements,&timestamp]).unwrap();
 
-    db.execute("DELETE FROM user_information WHERE date_modified != '04/19/2022'", &[]).unwrap();
-
-
+    // Clear out information that was not part of upsert using date_modified timestamp as a reference
+    db.execute("DELETE FROM user_information WHERE date_modified != $1", &[&timestamp]).unwrap();
 
        
 };
 
 
-
 }
+ 
+
+
+
+
+
 
 
 
